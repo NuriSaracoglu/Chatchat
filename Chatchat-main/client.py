@@ -34,7 +34,7 @@ def send_messages_to_server():
     global sock 
     while True: 
         username = input('Hi there, nice to see you here! \nPlease enter your username before you start chatting: ')
-        if username !="":
+        if username:
             try:      
                 sock.send(username.encode(hosts.unicode))
                 print(f'\nWelcome to NG {username}!\nThank you for choosing us.')
