@@ -1,0 +1,189 @@
+import socket
+import sys
+import threading
+import queue
+from time import sleep
+import hosts, ports, receive_multicast, send_multicast
+
+#TCP PART
+#TCP Socket for Server
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+host_address = (hosts.myIP, ports.server_port)
+
+# FIFO Queue
+FIFO = queue.Queue()
+
+#Display Server information
+def display_server_info():
+    print(f'\n[SERVER] Server List: {hosts.server_list} ==> Leader: {hosts.current_leader}'
+          f'\n[SERVER] Client List: {hosts.client_list}'
+          f'\n[SERVER] Neighbour: {hosts.current_neighbour}\n')
+ 
+def create_and_start_thread(target, args):
+    threading.Thread(target=target, args=args, daemon=True).start()
+   
+#Sending messages to the clients
+def send_messages_to_all_clients():
+    complete_message = ''
+    while not FIFO.empty():
+        complete_message += FIFO.get()
+        complete_message += '\n' if not FIFO.empty() else ''
+ 
+    
+    if complete_message:
+        #multicast_socket
+        for member in hosts.client_list:
+            member.send(complete_message.encode(hosts.unicode))
+
+def handle_client_messages(client, client_address):
+    while True:
+        try:
+            received_data = client.recv(hosts.buffer_size)
+ 
+            if not received_data:
+                print(f'{client_address} has disconnected')
+                FIFO.put(f'\n{client_address} has disconnected\n')
+                hosts.client_list.remove(client)
+                client.close()
+                break
+ 
+           
+            decoded_message = received_data.decode(hosts.unicode)
+            FIFO.put(f'{client_address} sagte: {decoded_message}')
+            print(f'Nachricht von {client_address} ==> {decoded_message}')
+ 
+        except Exception as error:
+            print(f'Error: {error}')
+            break
+
+def form_ring(members):
+    sorted_binary_ring = sorted([socket.inet_aton(member) for member in members])
+    sorted_ip_ring = [socket.inet_ntoa(node) for node in sorted_binary_ring]
+    return sorted_ip_ring
+
+
+def get_neighbour(members, current_member_ip, direction='left'):
+    current_member_index = members.index(current_member_ip) if current_member_ip in members else -1
+    if current_member_index != -1:
+        if direction == 'left':
+            if current_member_index + 1 == len(members):
+                return members[0]
+            else:
+                return members[current_member_index + 1]
+        else:
+            if current_member_index - 1 == 0:
+                return members[0]
+            else:
+                return members[current_member_index - 1]
+    else:
+        return None
+    
+    
+def start_leader_election(server_list, leader_server):
+    ring = form_ring(server_list)
+    neighbour = get_neighbour(ring, leader_server, 'right')
+    return neighbour if neighbour != hosts.myIP else None
+
+# Sending heartbeat
+def send_heartbeat():
+    while True:
+        # create Socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(1.5)
+
+        # Leader Election algorithm
+        hosts.current_neighbour = start_leader_election(hosts.server_list, hosts.myIP)
+        host_address = (hosts.current_neighbour, ports.server_port)
+
+        # Überprüfung, ob ein benachbarter Server vorhanden ist
+        if hosts.current_neighbour:
+            # Warte 5 Sekunden vor dem Senden des Heartbeat-Signals
+            sleep(5)
+
+            # Versuch, eine Verbindung zum benachbarten Server herzustellen, um das Heartbeat-Signal zu senden
+            try:
+                sock.connect(host_address)
+                print(f'[HEARTBEAT] Reply from Neighbours {hosts.current_neighbour}', file=sys.stderr)
+
+            except:
+                hosts.server_list.remove(hosts.current_neighbour)
+
+                # Check the crashed Server
+                if hosts.current_leader == hosts.current_neighbour:
+                    print(f'[HEARTBEAT] Server Leader {hosts.current_neighbour} failed', file=sys.stderr)
+                    hosts.is_leader_crashed = True
+                    # New Server Leader
+                    hosts.current_leader = hosts.myIP
+                    hosts.has_network_changed = True
+
+                else:
+                    print(f'[HEARTBEAT] Server Replica {hosts.current_neighbour} failed', file=sys.stderr)
+                    hosts.is_replica_crashed = True
+
+            finally:
+                sock.close()
+
+
+def initialize_and_listen_server():
+    sock.bind(host_address)
+    sock.listen()
+    print(f'\n[SERVER] it starts and listens on IP {hosts.myIP} with PORT {ports.server_port}',
+          file=sys.stderr)
+ 
+    while True:
+        try:
+            client, client_address = sock.accept()
+            received_data = client.recv(hosts.buffer_size)
+ 
+            
+            if received_data:
+                print(f'{client_address} connected')
+                FIFO.put(f'\n{client_address} connected\n')
+                hosts.client_list.append(client)
+                create_and_start_thread(handle_client_messages, (client, client_address))
+ 
+        except Exception as error:
+            print(f'Error: {error}')
+            break
+
+
+if __name__ == '__main__':
+
+    # trigger Multicast Sender 
+    multicast_receiver_exist = send_multicast.send_update_to_multicast_group()
+
+    # append the own IP to the Server List and assign the own IP as the Server Leader
+    if not multicast_receiver_exist:
+        hosts.server_list.append(hosts.myIP)
+        hosts.current_leader = hosts.myIP
+
+    # calling functions as Threads
+    create_and_start_thread(receive_multicast.receive_multicast_message, ())
+    create_and_start_thread(initialize_and_listen_server, ())
+    create_and_start_thread(send_heartbeat, ())
+
+    while True:
+        try:
+            # send Multicast Message to all Multicast Receivers (Servers)
+            if hosts.current_leader == hosts.myIP and hosts.has_network_changed or hosts.is_replica_crashed:
+                if hosts.is_leader_crashed:
+                    hosts.client_list = []
+                send_multicast.send_update_to_multicast_group()
+                hosts.is_leader_crashed = False
+                hosts.has_network_changed = False
+                hosts.is_replica_crashed = ''
+                display_server_info()
+
+            if hosts.current_leader != hosts.myIP and hosts.has_network_changed:
+                hosts.has_network_changed = False
+                display_server_info()
+
+            # function to send the FIFO Queue messages
+            send_messages_to_all_clients()
+
+        except KeyboardInterrupt:
+            sock.close()
+            print(f'\nClosing Server on IP {hosts.myIP} with PORT {ports.server_port}', file=sys.stderr)
+            break
