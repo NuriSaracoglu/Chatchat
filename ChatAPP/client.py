@@ -10,12 +10,13 @@ def create_and_start_thread(target, args):
 
 def send_messages_to_server():
     global sock 
- 
+    print("[INFO] Write your message to Client X: ")
     while True:
-        message = input("Type your message: ")
- 
+        message = input("")
+        
         try:
-            sock.send(message.encode(hosts.unicode))
+            if message != '':
+             sock.send(message.encode(hosts.unicode))
  
         except Exception as error:
             print(f"Error while sending message: {error}")
@@ -51,21 +52,21 @@ def establish_connection_to_server_leader():
     if server_exists:
         
         server_leader_address = (hosts.current_leader, ports.server_port)
-        print(f'The Server Leader is: {server_leader_address}')
+        print(f'[SERVER] {server_leader_address}')
  
         sock.connect(server_leader_address)
         sock.send('JOIN'.encode(hosts.unicode))
-        print("You have joined the Room.\nYou can start chatting.")
+        print("[INFO] Welcome to the Chatroom")
  
 
     else:
-        print("Please try joining the Room again later.")
+        print("[WARN] Please try joining the Chatroom again later.")
         os._exit(0)
 
 
 if __name__ == '__main__':
     try:
-        print("You try to join the chat room.")
+        print("[INFO] You try to join the Chatroom.")
 
         # Connect to Server Leader
         establish_connection_to_server_leader()
@@ -78,5 +79,6 @@ if __name__ == '__main__':
             pass
 
     except KeyboardInterrupt:
-        print("\nYou left the chatroom")
+        sock.close()
+        print("\nYou left the Chatroom")
 

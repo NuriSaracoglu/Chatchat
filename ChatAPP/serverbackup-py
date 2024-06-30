@@ -12,7 +12,7 @@ import hosts, ports, receive_multicast, send_multicast
 #TCP Socket for Server
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-host_address = (hosts.myIP, ports.server_port)
+server_host = (hosts.myIP, ports.server_port)
 
 # FIFO Queue
 FIFO = queue.Queue()
@@ -24,9 +24,7 @@ def display_server_info():
           f'\n[SERVER] Neighbour: {hosts.current_neighbour}\n')
  
 def create_and_start_thread(target, args):
-    new_thread = threading.Thread(target=target, args=args)
-    new_thread.daemon = True
-    new_thread.start()
+    threading.Thread(target=target, args=args,daemon=True).start()
 
 #Sending messages to the clients
 def send_messages_to_all_clients():
@@ -55,12 +53,14 @@ def handle_client_messages(client, client_address):
  
            
             decoded_message = received_data.decode(hosts.unicode)
-            FIFO.put(f'{client_address} sagte: {decoded_message}')
-            print(f'Nachricht von {client_address} ==> {decoded_message}')
+            FIFO.put(f'{client_address}: {decoded_message}')
+            print(f'The message from the client{client_address} is {decoded_message}')
  
         except Exception as error:
             print(f'Error: {error}')
             break
+
+#-------------------------------------------Leader Election ------------------------------------------------------------------------------------------------
 
 def form_ring(members):
     sorted_binary_ring = sorted([socket.inet_aton(member) for member in members])
@@ -89,7 +89,7 @@ def start_leader_election(server_list, leader_server):
     neighbour = get_neighbour(ring, leader_server, 'right')
     return neighbour if neighbour != hosts.myIP else None
 
-# Sending heartbeat
+#--------------------------------------------heartbeat servers--------------------------------------------------------------------------------------------------
 def send_heartbeat():
     while True:
         # create Socket
@@ -99,7 +99,7 @@ def send_heartbeat():
 
         # Leader Election algorithm
         hosts.current_neighbour = start_leader_election(hosts.server_list, hosts.myIP)
-        host_address = (hosts.current_neighbour, ports.server_port)
+        server_host  = (hosts.current_neighbour, ports.server_port)
 
         # Überprüfung, ob ein benachbarter Server vorhanden ist
         if hosts.current_neighbour:
@@ -108,7 +108,7 @@ def send_heartbeat():
 
             # Versuch, eine Verbindung zum benachbarten Server herzustellen, um das Heartbeat-Signal zu senden
             try:
-                sock.connect(host_address)
+                sock.connect(server_host )
                 print(f'[HEARTBEAT] Reply from Neighbours {hosts.current_neighbour}', file=sys.stderr)
 
             except:
@@ -130,7 +130,7 @@ def send_heartbeat():
                 sock.close()
 
 def initialize_and_listen_server():
-    sock.bind(host_address)
+    sock.bind(server_host)
     sock.listen()
     print(f'\n[SERVER] it starts and listens on IP {hosts.myIP} with PORT {ports.server_port}',
           file=sys.stderr)
@@ -142,7 +142,6 @@ def initialize_and_listen_server():
  
             
             if received_data:
-                print(f'{client_address} connected')
                 FIFO.put(f'\n{client_address} connected\n')
                 hosts.client_list.append(client)
                 create_and_start_thread(handle_client_messages, (client, client_address))
